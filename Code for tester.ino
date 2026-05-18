@@ -23,2401 +23,1088 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 #define UP_BUTTON 23
 #define DOWN_BUTTON 19
 #define NEXT_BUTTON 18
-// Variables
 
-const int total_modes0 = 8;
-int mode_index0 = 0;  // Start at first mode
+const int total_modes0 = 8;  // 0-6 are measurement modes, 7 is Inductance
+int mode_index0 = 0;
 
 const int total_modes1 = 3;
-int mode_index1 = 0;  // Start at voltage modes
+int mode_index1 = 0;
 
 const int total_modes2 = 3;
-int mode_index2 = 0; // Start at transistor modes
+int mode_index2 = 0;
 
-const int total_modes3 = 25;
-int mode_index3 = 0; // Start at iC modes
+const int total_modes3 = 34;
+int mode_index3 = 0;
 
-// Modes Array
+// Modes Arrays
 const char* master_modes[] = {
-    "Voltage",
-    "Current",
-    "Resistance",
-    "Capacitance",
-    "Continuity",
-    "IC Testing",
-    "Transistor test",
-    ""
+    "Voltage", "Current", "Resistance", "Capacitance",
+    "Continuity", "IC Testing", "Transistor test", "Inductance"
 };
 
-const char* voltage_modes[] = {
-  "5V",
-  "9V",
-  "15V"
-};
+const char* voltage_modes[] = { "5V", "9V", "15V" };
 
-const char* transistor_modes[] = {
-  "NPN / N-MOS",
-  "PNP / P-MOS",
-  "TEST"
-};
+const char* transistor_modes[] = { "NPN / N-MOS", "PNP / P-MOS", "TEST" };
 
 const char* ic_modes[] = {
-  "Find_IC",
-  "741",
-  "7400",
-  "7402",
-  "7404",
-  "7408",
-  "7432",
-  "7486",
-  "7401",
-  "7403",
-  "7405",
-  "7406",
-  "7407",
-  "7409",
-  "7410",
-  "7411",
-  "7412",
-  "7415",
-  "7420",
-  "7425",
-  "7427",
-  "7451",
-  "7458",
-  "74107",
-  "555"
+    // Original 25
+    "Find_IC", "741",   "7400",  "7402",  "7404",  "7408",  "7432",  "7486",
+    "7401",    "7403",  "7405",  "7406",  "7407",  "7409",  "7410",  "7411",
+    "7412",    "7415",  "7420",  "7425",  "7427",  "7451",  "7458",  "74107", "555",
+    // New — existing pins only (indices 25-31)
+    "7426",  "7428",  "7430",  "7433",  "7437",  "7438",  "74266",
+    // New — uses IC pin12(GPIO4) + pin13(GPIO5) (indices 32-33)
+    "7421",  "7474"
 };
-//display
-const int pins[3] = {2, 25, 26};
-//resistance
-// Transistor base GPIOs
-const int BASE1 = 32; // For 1kΩ
-const int BASE2 = 33; // For 10kΩ
-const int BASE3 = 13; // For 100kΩ
-const int ADC_PIN = 4; // Analog input pin
 
-// Known resistor values (Ω)
+// Pin aliases
+const int pins[3] = {2, 25, 26};
+
+// Resistance pins
+const int BASE1 = 32;
+const int BASE2 = 33;
+const int BASE3 = 13;
+const int ADC_PIN = 4;
+
 const float R1 = 973.0;
 const float R2 = 9760.0;
 const float R3 = 91100.0;
 
-// Constants
-const float ADC_REF = 3.3;      // ADC reference voltage
-const int ADC_RES = 4095;       // 12-bit ADC resolution
-const float V_IN = 2.7;         // Voltage after base-emitter drop
-//resistance
+const float ADC_REF = 3.3;
+const int ADC_RES = 4095;
+const float V_IN = 2.7;
 
-//voltage
-#define VOLTAGE_PIN 15  // GPIO15 as analog input
+// Voltage divider resistors
+#define VOLTAGE_PIN 15
 
-const float R01 = 21500.0; // 20kΩ
-const float R02 = 8840.0; // 10kΩ
-const float R03 = 39500.0; // 40k
+const float R01 = 21500.0;
+const float R02 = 8840.0;
+const float R03 = 39500.0;
 const float R04 = 9770.0;
-//voltage
 
-//capacitance
-  const int chargePin = 5;       // GPIO25 to charge capacitor
-  const int dischargePin = 2;    // GPIO27 to discharge capacitor
-  const int analogPin = 34;       // ADC input to measure voltage
-  const float R = 1500.0;        // Resistor value (10kΩ)
-  const int ADC_MAX = 4095;       // 12-bit resolution
-//capacitance
+// Inductance tester pins
+#define INDUCTOR_DRIVE_PIN  32   // OUTPUT — drives LC circuit via 150Ω resistor
+#define INDUCTOR_PULSE_PIN  35   // INPUT  — reads comparator/op-amp output (pulseIn)
+#define INDUCTOR_CAPACITANCE 2.0e-6  // Reference cap value in Farads (2µF) — change if different
 
-#define L 12    // Left pin (GPIO 2)
-#define M 14   // Middle pin (GPIO 25)
-#define R 27   // Right pin (GPIO 26)
+// IC base pin 12 and 13 — shared with resistance/capacitance, never active simultaneously
+#define IC_PIN12  4   // GPIO4  (resistance ADC in other mode)
+#define IC_PIN13  5   // GPIO5  (capacitance charge pin in other mode)
+const int chargePin = 5;
+const int dischargePin = 2;
+const int analogPin = 34;
+const float Rc = 1500.0;
+const int ADC_MAX = 4095;
 
-void buttons(){
-  if (digitalRead(UP_BUTTON) == HIGH) {
-        if (mode_index0 > 0) {
-            mode_index0--;
-            displayModes0();
-        }
+// Transistor pins
+#define L 12
+#define M 14
+#define R 27
+
+// ─────────────────────────────────────────────
+// SHARED DISPLAY HELPERS
+// ─────────────────────────────────────────────
+
+// Prepare display for a fresh text frame
+void dispBegin() {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+}
+
+// Show PASS/FAIL result for an IC or component test
+void showResult(const char* label, bool pass) {
+    dispBegin();
+    if (pass) {
+        display.print(label);
+        display.println(" WORKING");
+        Serial.print(label); Serial.println(" WORKING");
+    } else {
+        display.print(label);
+        display.println(" FAULTY");
+        Serial.print(label); Serial.println(" FAULTY");
+    }
+    display.display();
+}
+
+// Show "Executing: <name>" splash before running a mode
+void showExecuting(const char* name) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(10, 10);
+    display.print("Executing:");
+    display.setCursor(10, 20);
+    display.print(name);
+    display.display();
+    Serial.print("Executing Mode: ");
+    Serial.println(name);
+}
+
+// ─────────────────────────────────────────────
+// UNIFIED MENU DISPLAY
+// Replaces displayModes0/1/2/3
+// ─────────────────────────────────────────────
+void displayMenu(const char** modes, int total, int selected) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+
+    int start = selected > 0 ? selected - 1 : 0;
+    int end = start + 3;
+    if (end > total) end = total;
+
+    for (int i = start; i < end; i++) {
+        display.setCursor(10, (i - start) * 10);
+        display.print(i == selected ? "> " : "  ");
+        display.print(modes[i]);
+    }
+    display.display();
+}
+
+// Convenience wrappers (buttons() and loop() call these by name)
+void displayModes0() { displayMenu(master_modes,     total_modes0, mode_index0); }
+void displayModes1() { displayMenu(voltage_modes,    total_modes1, mode_index1); }
+void displayModes2() { displayMenu(transistor_modes, total_modes2, mode_index2); }
+void displayModes3() { displayMenu(ic_modes,         total_modes3, mode_index3); }
+
+// ─────────────────────────────────────────────
+// BUTTON HANDLER
+// ─────────────────────────────────────────────
+void buttons() {
+    if (digitalRead(UP_BUTTON) == HIGH) {
+        if (mode_index0 > 0) { mode_index0--; displayModes0(); }
         delay(200);
     }
-
-    // DOWN Button (Scroll Down)
     if (digitalRead(DOWN_BUTTON) == HIGH) {
-        if (mode_index0 < total_modes0 - 1) {
-            mode_index0++;
-            displayModes0();
-        }
+        if (mode_index0 < total_modes0 - 1) { mode_index0++; displayModes0(); }
         delay(200);
     }
-
-    // NEXT Button (Select Mode)
     if (digitalRead(NEXT_BUTTON) == HIGH) {
         executeMode0(mode_index0);
         delay(1000);
-        ESP.restart();  // Restart ESP32 after executing function
+        ESP.restart();
     }
-
 }
 
-
-
-// Function to Display Modes (3 at a time)
-void displayModes0() {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    
-    int start = mode_index0 > 0 ? mode_index0 - 1 : 0;
-    int end = start + 3;
-    if (end > total_modes0) end = total_modes0;
-    
-    for (int i = start; i < end; i++) {
-        display.setCursor(10, (i - start) * 10);
-        if (i == mode_index0) {
-            display.print("> "); // Highlight selected mode
-        } else {
-            display.print("  ");
-        }
-        display.print(master_modes[i]);
-    }
-
-    display.display();
-}
-
-void displayModes1() {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    
-    int start = mode_index1 > 0 ? mode_index1 - 1 : 0;
-    int end = start + 3;
-    if (end > total_modes1) end = total_modes1;
-    
-    for (int i = start; i < end; i++) {
-        display.setCursor(10, (i - start) * 10);
-        if (i == mode_index1) {
-            display.print("> "); // Highlight selected mode
-        } else {
-            display.print("  ");
-        }
-        display.print(voltage_modes[i]);
-    }
-
-    display.display();
-}
-
-void displayModes2() {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    
-    int start = mode_index2 > 0 ? mode_index2 - 1 : 0;
-    int end = start + 3;
-    if (end > total_modes2) end = total_modes2;
-    
-    for (int i = start; i < end; i++) {
-        display.setCursor(10, (i - start) * 10);
-        if (i == mode_index2) {
-            display.print("> "); // Highlight selected mode
-        } else {
-            display.print("  ");
-        }
-        display.print(transistor_modes[i]);
-    }
-
-    display.display();
-}
-
-void displayModes3() {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    
-    int start = mode_index3 > 0 ? mode_index3 - 1 : 0;
-    int end = start + 3;
-    if (end > total_modes3) end = total_modes3;
-    
-    for (int i = start; i < end; i++) {
-        display.setCursor(10, (i - start) * 10);
-        if (i == mode_index3) {
-            display.print("> "); // Highlight selected mode
-        } else {
-            display.print("  ");
-        }
-        display.print(ic_modes[i]);
-    }
-
-    display.display();
-}
-
-// Function to Execute Selected Mode
+// ─────────────────────────────────────────────
+// UNIFIED EXECUTE MODE
+// Replaces executeMode0/1/2/3
+// ─────────────────────────────────────────────
 void executeMode0(int mode) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(10, 10);
-    display.print("Executing:");
-    display.setCursor(10, 20);
-    display.print(master_modes[mode]);
-
-    display.display();
-    Serial.print("Executing Mode: ");
-    Serial.println(master_modes[mode]);
-
-    // Call specific function based on selected mode
+    showExecuting(master_modes[mode]);
     switch (mode) {
-        case 0: measureVoltage(); break;
-        case 1: measureCurrent(); break;
+        case 0: measureVoltage();    break;
+        case 1: measureCurrent();    break;
         case 2: measureResistance(); break;
-        case 3: measureCapacitance(); break;
-        case 4: continuity(); break;
-        case 5: testIC(); break;
-        case 6: testTransistor(); break;
+        case 3: measureCapacitance();break;
+        case 4: continuity();        break;
+        case 5: testIC();            break;
+        case 6: testTransistor();    break;
+        case 7: measureInductance(); break;
     }
-
-    delay(2000);  // Pause before restart
+    delay(2000);
 }
+
 void executeMode1(int mode) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(10, 10);
-    display.print("Executing:");
-    display.setCursor(10, 20);
-    display.print(voltage_modes[mode]);
-
-    display.display();
-    Serial.print("Executing Mode: ");
-    Serial.println(voltage_modes[mode]);
-
-    // Call specific function based on selected mode
+    showExecuting(voltage_modes[mode]);
+    float Rtop;
     switch (mode) {
-        case 0: measureVoltage3(); break;
-        case 1: measureVoltage9(); break;
-        case 2: measureVoltage15(); break;
+        case 0: Rtop = R04; break;
+        case 1: Rtop = R01; break;
+        case 2: Rtop = R03; break;
+        default: return;
     }
-
-    delay(2000);  // Pause before restart
+    measureVoltageRange(Rtop, R02);
+    delay(2000);
 }
 
 void executeMode2(int mode) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(10, 10);
-    display.print("Executing:");
-    display.setCursor(10, 20);
-    display.print(transistor_modes[mode]);
-
-    display.display();
-    Serial.print("Executing Mode: ");
-    Serial.println(transistor_modes[mode]);
-
-    // Call specific function based on selected mode
+    showExecuting(transistor_modes[mode]);
     switch (mode) {
         case 0: check_npn(); break;
         case 1: check_pnp(); break;
-        case 2: TEST(); break;
+        case 2: TEST();      break;
     }
-
-    delay(2000);  // Pause before restart
+    delay(2000);
 }
 
 void executeMode3(int mode) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(10, 10);
-    display.print("Executing:");
-    display.setCursor(10, 20);
-    display.print(ic_modes[mode]);
-
-    display.display();
-    Serial.print("Executing Mode: ");
-    Serial.println(ic_modes[mode]);
-
-    // Call specific function based on selected mode
+    showExecuting(ic_modes[mode]);
     switch (mode) {
-    case 0: Find_IC(); break;
-    case 1: check_741(); break;
-    case 2: check_7400(); break;
-    case 3: check_7402(); break;
-    case 4: check_7404(); break;
-    case 5: check_7408(); break;
-    case 6: check_7432(); break;
-    case 7: check_7486(); break;
-    case 8: check_7401(); break;
-    case 9: check_7403(); break;
-    case 10: check_7405(); break;
-    case 11: check_7406(); break;
-    case 12: check_7407(); break;
-    case 13: check_7409(); break;
-    case 14: check_7410(); break;
-    case 15: check_7411(); break;
-    case 16: check_7412(); break;
-    case 17: check_7415(); break;
-    case 18: check_7420(); break;
-    case 19: check_7425(); break;
-    case 20: check_7427(); break;
-    case 21: check_7451(); break;
-    case 22: check_7458(); break;
-    case 23: check_74107(); break;
-    case 24: check_555(); break;
+        case 0:  Find_IC();      break;
+        case 1:  check_741();    break;
+        case 2:  check_7400();   break;
+        case 3:  check_7402();   break;
+        case 4:  check_7404();   break;
+        case 5:  check_7408();   break;
+        case 6:  check_7432();   break;
+        case 7:  check_7486();   break;
+        case 8:  check_7401();   break;
+        case 9:  check_7403();   break;
+        case 10: check_7405();   break;
+        case 11: check_7406();   break;
+        case 12: check_7407();   break;
+        case 13: check_7409();   break;
+        case 14: check_7410();   break;
+        case 15: check_7411();   break;
+        case 16: check_7412();   break;
+        case 17: check_7415();   break;
+        case 18: check_7420();   break;
+        case 19: check_7425();   break;
+        case 20: check_7427();   break;
+        case 21: check_7451();   break;
+        case 22: check_7458();   break;
+        case 23: check_74107();  break;
+        case 24: check_555();    break;
+        // New ICs — existing pins only
+        case 25: check_7426();   break;
+        case 26: check_7428();   break;
+        case 27: check_7430();   break;
+        case 28: check_7433();   break;
+        case 29: check_7437();   break;
+        case 30: check_7438();   break;
+        case 31: check_74266();  break;
+        // New ICs — use IC pin12(GPIO4) + pin13(GPIO5)
+        case 32: check_7421();   break;
+        case 33: check_7474();   break;
+    }
+    delay(2000);
 }
 
-    delay(2000);  // Pause before restart
+// ─────────────────────────────────────────────
+// IC TESTING
+// ─────────────────────────────────────────────
+
+// Helper: run 2-input truth table, return pass/fail
+bool test2Input(int pinA, int pinB, int pinY,
+                bool a0, bool a1, bool a2, bool a3,  // expected outputs for 00,01,10,11
+                bool invertedPins = false) {
+    if (!invertedPins) {
+        pinMode(pinA, OUTPUT); pinMode(pinB, OUTPUT);
+    } else {
+        pinMode(pinB, OUTPUT); pinMode(pinA, OUTPUT);
+    }
+    pinMode(pinY, INPUT);
+
+    bool pass = true;
+    bool inputs[4][2] = {{LOW,LOW},{LOW,HIGH},{HIGH,LOW},{HIGH,HIGH}};
+    bool expected[4] = {a0, a1, a2, a3};
+
+    for (int i = 0; i < 4; i++) {
+        digitalWrite(pinA, inputs[i][0]);
+        digitalWrite(pinB, inputs[i][1]);
+        delay(10);
+        if ((bool)digitalRead(pinY) != expected[i]) pass = false;
+    }
+    return pass;
 }
 
 void Find_IC() {
-  display.clearDisplay();
+    display.clearDisplay();
 
-  ///////////////////////////////////// 7400: NAND Gate /////////////////////////////////////
-  const int inputA_7400 = 2;
-  const int inputB_7400 = 25;
-  const int outputY_7400 = 26;
+    // Each test: { pinA, pinB, pinY, truth table for 00/01/10/11 }
+    struct ICTest { int a, b, y; bool t[4]; const char* name; };
 
-  pinMode(inputA_7400, OUTPUT);
-  pinMode(inputB_7400, OUTPUT);
-  pinMode(outputY_7400, INPUT);
+    ICTest tests[] = {
+        { 2, 25, 26, {HIGH, HIGH, HIGH, LOW},  "7400" },  // NAND
+        {26, 25,  2, {HIGH, LOW,  LOW,  LOW},  "7402" },  // NOR
+        { 2, 25, 26, {LOW,  LOW,  LOW,  HIGH}, "7408" },  // AND
+        { 2, 25, 26, {LOW,  HIGH, HIGH, HIGH}, "7432" },  // OR
+        { 2, 25, 26, {LOW,  HIGH, HIGH, LOW},  "7486" },  // XOR
+    };
 
-  bool testPass7400 = true;
-  digitalWrite(inputA_7400, LOW); digitalWrite(inputB_7400, LOW); delay(10);
-  if (digitalRead(outputY_7400) != HIGH) testPass7400 = false;
+    for (auto& t : tests) {
+        bool pass = test2Input(t.a, t.b, t.y, t.t[0], t.t[1], t.t[2], t.t[3]);
+        if (pass) {
+            dispBegin();
+            display.print(t.name); display.println(" FOUND");
+            display.display();
+            delay(500);
+            return;  // Early exit — no need to test further
+        }
+    }
 
-  digitalWrite(inputA_7400, LOW); digitalWrite(inputB_7400, HIGH); delay(10);
-  if (digitalRead(outputY_7400) != HIGH) testPass7400 = false;
+    // 7404 inverter (single input, different structure)
+    pinMode(2, OUTPUT); pinMode(25, INPUT);
+    digitalWrite(2, LOW); delay(10);
+    bool inv_pass = (digitalRead(25) == HIGH);
+    digitalWrite(2, HIGH); delay(10);
+    inv_pass &= (digitalRead(25) == LOW);
 
-  digitalWrite(inputA_7400, HIGH); digitalWrite(inputB_7400, LOW); delay(10);
-  if (digitalRead(outputY_7400) != HIGH) testPass7400 = false;
-
-  digitalWrite(inputA_7400, HIGH); digitalWrite(inputB_7400, HIGH); delay(10);
-  if (digitalRead(outputY_7400) != LOW) testPass7400 = false;
-
-  ///////////////////////////////////// 7402: NOR Gate /////////////////////////////////////
-  const int inputA_7402 = 26;
-  const int inputB_7402 = 25;
-  const int outputY_7402 = 2;
-
-  pinMode(inputA_7402, OUTPUT);
-  pinMode(inputB_7402, OUTPUT);
-  pinMode(outputY_7402, INPUT);
-
-  bool testPass7402 = true;
-  digitalWrite(inputA_7402, LOW); digitalWrite(inputB_7402, LOW); delay(10);
-  if (digitalRead(outputY_7402) != HIGH) testPass7402 = false;
-
-  digitalWrite(inputA_7402, LOW); digitalWrite(inputB_7402, HIGH); delay(10);
-  if (digitalRead(outputY_7402) != LOW) testPass7402 = false;
-
-  digitalWrite(inputA_7402, HIGH); digitalWrite(inputB_7402, LOW); delay(10);
-  if (digitalRead(outputY_7402) != LOW) testPass7402 = false;
-
-  digitalWrite(inputA_7402, HIGH); digitalWrite(inputB_7402, HIGH); delay(10);
-  if (digitalRead(outputY_7402) != LOW) testPass7402 = false;
-
-  ///////////////////////////////////// 7404: Inverter (NOT) /////////////////////////////////////
-  const int inputA_7404 = 2;
-  const int outputY_7404 = 25;
-
-  pinMode(inputA_7404, OUTPUT);
-  pinMode(outputY_7404, INPUT);
-
-  bool testPass7404 = true;
-  digitalWrite(inputA_7404, LOW); delay(10);
-  if (digitalRead(outputY_7404) != HIGH) testPass7404 = false;
-
-  digitalWrite(inputA_7404, HIGH); delay(10);
-  if (digitalRead(outputY_7404) != LOW) testPass7404 = false;
-
-  ///////////////////////////////////// 7408: AND Gate /////////////////////////////////////
-  const int inputA_7408 = 2;
-  const int inputB_7408 = 25;
-  const int outputY_7408 = 26;
-
-  pinMode(inputA_7408, OUTPUT);
-  pinMode(inputB_7408, OUTPUT);
-  pinMode(outputY_7408, INPUT);
-
-  bool testPass7408 = true;
-  digitalWrite(inputA_7408, LOW); digitalWrite(inputB_7408, LOW); delay(10);
-  if (digitalRead(outputY_7408) != LOW) testPass7408 = false;
-
-  digitalWrite(inputA_7408, LOW); digitalWrite(inputB_7408, HIGH); delay(10);
-  if (digitalRead(outputY_7408) != LOW) testPass7408 = false;
-
-  digitalWrite(inputA_7408, HIGH); digitalWrite(inputB_7408, LOW); delay(10);
-  if (digitalRead(outputY_7408) != LOW) testPass7408 = false;
-
-  digitalWrite(inputA_7408, HIGH); digitalWrite(inputB_7408, HIGH); delay(10);
-  if (digitalRead(outputY_7408) != HIGH) testPass7408 = false;
-
-  ///////////////////////////////////// 7432: OR Gate /////////////////////////////////////
-  const int inputA_7432 = 2;
-  const int inputB_7432 = 25;
-  const int outputY_7432 = 26;
-
-  pinMode(inputA_7432, OUTPUT);
-  pinMode(inputB_7432, OUTPUT);
-  pinMode(outputY_7432, INPUT);
-
-  bool testPass7432 = true;
-  digitalWrite(inputA_7432, LOW); digitalWrite(inputB_7432, LOW); delay(10);
-  if (digitalRead(outputY_7432) != LOW) testPass7432 = false;
-
-  digitalWrite(inputA_7432, LOW); digitalWrite(inputB_7432, HIGH); delay(10);
-  if (digitalRead(outputY_7432) != HIGH) testPass7432 = false;
-
-  digitalWrite(inputA_7432, HIGH); digitalWrite(inputB_7432, LOW); delay(10);
-  if (digitalRead(outputY_7432) != HIGH) testPass7432 = false;
-
-  digitalWrite(inputA_7432, HIGH); digitalWrite(inputB_7432, HIGH); delay(10);
-  if (digitalRead(outputY_7432) != HIGH) testPass7432 = false;
-
-  ///////////////////////////////////// 7486: XOR Gate /////////////////////////////////////
-  const int inputA_7486 = 2;
-  const int inputB_7486 = 25;
-  const int outputY_7486 = 26;
-
-  pinMode(inputA_7486, OUTPUT);
-  pinMode(inputB_7486, OUTPUT);
-  pinMode(outputY_7486, INPUT);
-
-  bool testPass7486 = true;
-  digitalWrite(inputA_7486, LOW); digitalWrite(inputB_7486, LOW); delay(10);
-  if (digitalRead(outputY_7486) != LOW) testPass7486 = false;
-
-  digitalWrite(inputA_7486, LOW); digitalWrite(inputB_7486, HIGH); delay(10);
-  if (digitalRead(outputY_7486) != HIGH) testPass7486 = false;
-
-  digitalWrite(inputA_7486, HIGH); digitalWrite(inputB_7486, LOW); delay(10);
-  if (digitalRead(outputY_7486) != HIGH) testPass7486 = false;
-
-  digitalWrite(inputA_7486, HIGH); digitalWrite(inputB_7486, HIGH); delay(10);
-  if (digitalRead(outputY_7486) != LOW) testPass7486 = false;
-
-  ///////////////////////////////////// Result Display /////////////////////////////////////
-  if (testPass7400) {
-    display.println("7400 FOUND");
-  }
-  else if (testPass7402) {
-    display.println("7402 FOUND");
-  }
-  else if (testPass7408) {
-    display.println("7408 FOUND");
-  }
-  else if (testPass7432) {
-    display.println("7432 FOUND");
-  }
-  else if (testPass7486) {
-    display.println("7486 FOUND");
-  }
-  else if (testPass7404) {
-    display.println("7404 FOUND");
-  }
-  else {
-    display.println("IC Not Working");
-  }
-  display.display();
-  delay(500);
+    dispBegin();
+    if (inv_pass) { display.println("7404 FOUND"); }
+    else          { display.println("IC Not Working"); }
+    display.display();
+    delay(500);
 }
 
-//LINEAR IC
+// LINEAR IC
 void check_555() {
-  // GPIO Mappings
-  const int TRIG = 2;
-  const int OUT = 25;
-  const int RESET = 26;
-  const int CTRL = 32;   // We leave this floating or pull low (optional)
-  const int THR = 33;
-  const int DISCH = 13;
-  const int GND = 27;
+    const int TRIG  = 2;
+    const int OUT   = 25;
+    const int RESET = 26;
+    const int CTRL  = 32;
+    const int THR   = 33;
+    const int DISCH = 13;
+    const int GND   = 27;
 
-  pinMode(GND, OUTPUT);
-  digitalWrite(GND, LOW);
-  pinMode(RESET, OUTPUT);
-  digitalWrite(RESET, HIGH);  // Keep 555 enabled
+    pinMode(GND, OUTPUT);   digitalWrite(GND, LOW);
+    pinMode(RESET, OUTPUT); digitalWrite(RESET, HIGH);
+    pinMode(TRIG, INPUT); pinMode(THR, INPUT);
+    pinMode(OUT, INPUT); pinMode(DISCH, INPUT); pinMode(CTRL, INPUT);
 
-  pinMode(TRIG, INPUT);   // Inputs: Trigger, Threshold
-  pinMode(THR, INPUT);
-  pinMode(OUT, INPUT);    // Output pin of 555
-  pinMode(DISCH, INPUT);  // Monitor discharge (open collector)
-  pinMode(CTRL, INPUT);   // Optional input for control voltage
-
-  int highCount = 0;
-  int lowCount = 0;
-
-  unsigned long start = millis();
-  while (millis() - start < 3000) { // 3-second test window
-    int val = digitalRead(OUT);
-    if (val == HIGH) highCount++;
-    else lowCount++;
-    delay(10);
-  }
-
-  if (highCount > 10 && lowCount > 10) {
-    display.print("555 WORKING");
-  } else {
-    display.print("555 FAULTY");
-  }
-  display.display();
-  delay(500);
+    int highCount = 0, lowCount = 0;
+    unsigned long start = millis();
+    while (millis() - start < 3000) {
+        if (digitalRead(OUT) == HIGH) highCount++; else lowCount++;
+        delay(10);
+    }
+    showResult("555", highCount > 10 && lowCount > 10);
+    delay(500);
 }
-
 
 void check_741() {
-  // GPIO Mappings
-  const int VCC = 33;    // Pin 7
-  const int IN_PLUS = 26;  // Pin 3 (non-inverting)
-  const int IN_MINUS = 25; // Pin 2 (inverting)
-  const int OUT = 32;      // Pin 6
+    const int VCC      = 33;
+    const int IN_PLUS  = 26;
+    const int IN_MINUS = 25;
+    const int OUT      = 32;
 
-  // Power the Op-Amp
-  pinMode(VCC, OUTPUT);
-  digitalWrite(VCC, HIGH);
+    pinMode(VCC, OUTPUT);      digitalWrite(VCC, HIGH);
+    pinMode(IN_PLUS, OUTPUT);
+    pinMode(IN_MINUS, OUTPUT);
+    pinMode(OUT, INPUT);
 
-  // Setup input test voltages (using internal pullups & pulldowns)
-  pinMode(IN_PLUS, OUTPUT);
-  pinMode(IN_MINUS, OUTPUT);
-  pinMode(OUT, INPUT);
-
-  // Test 1: IN+ > IN- → Output should be HIGH
-  digitalWrite(IN_PLUS, HIGH);  // 3.3V
-  digitalWrite(IN_MINUS, LOW);  // 0V
-  delay(10);
-  bool test1 = digitalRead(OUT) == HIGH;
-
-
-  if (test1) {
-    display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-    display.println("741 WORKING");
-    display.display();
-    Serial.println("741 WORKING");
-  } else {
-    display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-    display.println("741 FAULTY");
-    display.display();
-    Serial.println("741 not WORKING");
-  }
+    digitalWrite(IN_PLUS, HIGH); digitalWrite(IN_MINUS, LOW);
+    delay(10);
+    bool test1 = (digitalRead(OUT) == HIGH);
+    showResult("741", test1);
 }
 
-//BASIC LOGIC GATE DIGITAL IC
-void check_7400() {
-  const int inputA = 2;  // IC pin 1
-  const int inputB = 25;  // IC pin 2
-  const int outputY = 26; // IC pin 3
-
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // NAND Truth Table: Y = !(A & B)
-  // 0 0 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 0 1 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 0 -> 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 1 -> 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7400 WORKING");
-    Serial.println("7400 WORKING");
-  } else {
-    display.println("7400 FAULTY");
-    Serial.println("7400 not WORKING");
-  }
-
-  display.display(); // <- Important to update screen
-}
-
-void check_7402() {
-  const int inputA = 26;  // IC pin 1
-  const int inputB = 25;  // IC pin 2
-  const int outputY = 2; // IC pin 3
-
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // NAND Truth Table: Y = !(A & B)
-  // 0 0 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 0 1 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 0 -> 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 1 -> 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7402 WORKING");
-    Serial.println("7402 WORKING");
-  } else {
-    display.println("7402 FAULTY");
-    Serial.println("7402 not WORKING");
-  }
-
-  display.display(); // <- Important to update screen
-}
+// BASIC LOGIC GATES — all use showResult() + test2Input()
+void check_7400() { showResult("7400", test2Input(2,25,26, HIGH,HIGH,HIGH,LOW )); }
+void check_7401() { showResult("7401", test2Input(26,25,2, HIGH,HIGH,HIGH,LOW )); }
+void check_7402() { showResult("7402", test2Input(26,25,2, HIGH,LOW, LOW, LOW )); }
+void check_7403() { showResult("7403", test2Input(2,25,26, HIGH,LOW, LOW, LOW )); }
 
 void check_7404() {
-  pinMode(2, OUTPUT); // IC Pin 1
-  pinMode(25, INPUT);  // IC Pin 2
-
-  digitalWrite(2, LOW);
-  delay(10);
-  bool output = digitalRead(25);
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  if (output == HIGH) {
-    display.println("7404 WORKING");
-    Serial.println("7404 WORKING");
-  } else {
-    display.println("7404 FAULTY");
-    Serial.println("7404 FAULTY");
-  }
-  display.display();
+    pinMode(2, OUTPUT); pinMode(25, INPUT);
+    digitalWrite(2, LOW); delay(10);
+    bool out = (digitalRead(25) == HIGH);
+    showResult("7404", out);
 }
-
-void check_7408() {
-  const int inputA = 2;  // IC pin 1
-  const int inputB = 25;  // IC pin 2
-  const int outputY = 26; // IC pin 3
-
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // NAND Truth Table: Y = !(A & B)
-  // 0 0 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 0 1 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 0 -> 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 1 -> 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7408 WORKING");
-    Serial.println("7408 WORKING");
-  } else {
-    display.println("7408 FAULTY");
-    Serial.println("7408 not WORKING");
-  }
-
-  display.display(); // <- Important to update screen
-}
-
-void check_7432() {
-  const int inputA = 2;  // IC pin 1
-  const int inputB = 25;  // IC pin 2
-  const int outputY = 26; // IC pin 3
-
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // NAND Truth Table: Y = !(A & B)
-  // 0 0 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 0 1 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 0 -> 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 1 -> 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7432 WORKING");
-    Serial.println("7432 WORKING");
-  } else {
-    display.println("7432 FAULTY");
-    Serial.println("7432 not WORKING");
-  }
-
-  display.display(); // <- Important to update screen
-}
-
-void check_7486() {
-  const int inputA = 2;  // IC pin 1
-  const int inputB = 25;  // IC pin 2
-  const int outputY = 26; // IC pin 3
-
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // NAND Truth Table: Y = !(A & B)
-  // 0 0 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 0 1 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 0 -> 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 1 -> 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7486 WORKING");
-    Serial.println("7486 WORKING");
-  } else {
-    display.println("7486 FAULTY");
-    Serial.println("7486 not WORKING");
-  }
-
-  display.display(); // <- Important to update screen
-}
-
-
-//EXTRA IC
-void check_7401() {
-  const int inputA = 26;  // IC pin 1
-  const int inputB = 25;  // IC pin 2
-  const int outputY = 2; // IC pin 3
-
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // NAND Truth Table: Y = !(A & B)
-  // 0 0 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 0 1 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 0 -> 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 1 -> 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7401 WORKING");
-    Serial.println("7401 WORKING");
-  } else {
-    display.println("7401 FAULTY");
-    Serial.println("7401 not WORKING");
-  }
-
-  display.display(); // <- Important to update screen
-}
-
-void check_7403() {
-  const int inputA = 2;  // IC pin 1
-  const int inputB = 25;  // IC pin 2
-  const int outputY = 26; // IC pin 3
-
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // NAND Truth Table: Y = !(A & B)
-  // 0 0 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 0 1 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 0 -> 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 1 -> 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7403 WORKING");
-    Serial.println("7403 WORKING");
-  } else {
-    display.println("7403 FAULTY");
-    Serial.println("7403 not WORKING");
-  }
-
-  display.display(); // <- Important to update screen
-}
-
 void check_7405() {
-  pinMode(2, OUTPUT); // IC Pin 1
-  pinMode(25, INPUT);  // IC Pin 2
-
-  digitalWrite(2, LOW);
-  delay(10);
-  bool output = digitalRead(25);
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  if (output == HIGH) {
-    display.println("7405 WORKING");
-    Serial.println("7405 WORKING");
-  } else {
-    display.println("7405 FAULTY");
-    Serial.println("7405 FAULTY");
-  }
-  display.display();
+    pinMode(2, OUTPUT); pinMode(25, INPUT);
+    digitalWrite(2, LOW); delay(10);
+    showResult("7405", digitalRead(25) == HIGH);
 }
-
 void check_7406() {
-  pinMode(2, OUTPUT); // IC Pin 1
-  pinMode(25, INPUT);  // IC Pin 2
-
-  digitalWrite(2, LOW);
-  delay(10);
-  bool output = digitalRead(25);
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  if (output == HIGH) {
-    display.println("7406 WORKING");
-    Serial.println("7406 WORKING");
-  } else {
-    display.println("7406 FAULTY");
-    Serial.println("7406 FAULTY");
-  }
-  display.display();
+    pinMode(2, OUTPUT); pinMode(25, INPUT);
+    digitalWrite(2, LOW); delay(10);
+    showResult("7406", digitalRead(25) == HIGH);
 }
-
 void check_7407() {
-  pinMode(2, OUTPUT); // IC Pin 1
-  pinMode(25, INPUT);  // IC Pin 2
-
-  digitalWrite(2, LOW);
-  delay(10);
-  bool output = digitalRead(25);
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  if (output == LOW) {
-    display.println("7407 WORKING");
-    Serial.println("7407 WORKING");
-  } else {
-    display.println("7407 FAULTY");
-    Serial.println("7407 FAULTY");
-  }
-  display.display();
+    pinMode(2, OUTPUT); pinMode(25, INPUT);
+    digitalWrite(2, LOW); delay(10);
+    showResult("7407", digitalRead(25) == LOW);
 }
 
-void check_7409() {
-  const int inputA = 2;  // IC pin 1
-  const int inputB = 25;  // IC pin 2
-  const int outputY = 26; // IC pin 3
+void check_7408() { showResult("7408", test2Input(2,25,26, LOW, LOW, LOW, HIGH)); }
+void check_7409() { showResult("7409", test2Input(2,25,26, LOW, LOW, LOW, HIGH)); }
+void check_7432() { showResult("7432", test2Input(2,25,26, LOW, HIGH,HIGH,HIGH)); }
+void check_7486() { showResult("7486", test2Input(2,25,26, LOW, HIGH,HIGH,LOW )); }
 
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(outputY, INPUT);
+// 3-INPUT GATE HELPER
+bool test3Input(int pinA, int pinB, int pinC, int pinY,
+                bool t000, bool t001, bool t010, bool t011,
+                bool t100, bool t101, bool t110, bool t111) {
+    pinMode(pinA, OUTPUT); pinMode(pinB, OUTPUT);
+    pinMode(pinC, OUTPUT); pinMode(pinY, INPUT);
 
-  bool testPass = true;
+    bool pass = true;
+    bool inputs[8][3] = {
+        {0,0,0},{0,0,1},{0,1,0},{0,1,1},
+        {1,0,0},{1,0,1},{1,1,0},{1,1,1}
+    };
+    bool expected[8] = {t000,t001,t010,t011,t100,t101,t110,t111};
 
-  // NAND Truth Table: Y = !(A & B)
-  // 0 0 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 0 1 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 0 -> 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 1 -> 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7409 WORKING");
-    Serial.println("7409 WORKING");
-  } else {
-    display.println("7409 FAULTY");
-    Serial.println("7409 not WORKING");
-  }
-
-  display.display(); // <- Important to update screen
+    for (int i = 0; i < 8; i++) {
+        digitalWrite(pinA, inputs[i][0]);
+        digitalWrite(pinB, inputs[i][1]);
+        digitalWrite(pinC, inputs[i][2]);
+        delay(10);
+        if ((bool)digitalRead(pinY) != expected[i]) pass = false;
+    }
+    return pass;
 }
 
-void check_7410() {
-  const int inputA = 2;    // IC pin 1
-  const int inputB = 25;   // IC pin 2
-  const int inputC = 27;   // IC pin 13
-  const int outputY = 26;  // IC pin 12
-
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(inputC, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // All 8 input combinations for 3-input NAND
-  // Format: A, B, C => Expected Output
-
-  // 0 0 0 => 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 0 0 1 => 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 0 1 0 => 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 0 1 1 => 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 0 0 => 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 0 1 => 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 1 0 => 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 1 1 => 0 (Only this input gives LOW output)
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7410 WORKING");
-    Serial.println("7410 WORKING");
-  } else {
-    display.println("7410 FAULTY");
-    Serial.println("7410 FAULTY");
-  }
-
-  display.display(); // <- Important to update screen
+void check_7410() {  // 3-input NAND
+    showResult("7410", test3Input(2,25,27,26,
+        HIGH,HIGH,HIGH,HIGH,HIGH,HIGH,HIGH,LOW));
+}
+void check_7411() {  // 3-input AND
+    showResult("7411", test3Input(2,25,27,26,
+        LOW,LOW,LOW,LOW,LOW,LOW,LOW,HIGH));
+}
+void check_7412() {  // 3-input NAND (OC)
+    showResult("7412", test3Input(2,25,27,26,
+        HIGH,HIGH,HIGH,HIGH,HIGH,HIGH,HIGH,LOW));
+}
+void check_7415() {  // 3-input AND (OC)
+    showResult("7415", test3Input(2,25,27,26,
+        LOW,LOW,LOW,LOW,LOW,LOW,LOW,HIGH));
+}
+void check_7427() {  // 3-input NOR
+    showResult("7427", test3Input(27,2,25,26,
+        HIGH,LOW,LOW,LOW,LOW,LOW,LOW,LOW));
 }
 
-void check_7411() {
-  const int inputA = 2;    // IC pin 1
-  const int inputB = 25;   // IC pin 2
-  const int inputC = 27;   // IC pin 13
-  const int outputY = 26;  // IC pin 12
+// 4-INPUT GATE HELPER
+bool test4Input(int pinA, int pinB, int pinC, int pinD, int pinY,
+                bool t0000, bool t0001, bool t0111, bool t1111) {
+    pinMode(pinA, OUTPUT); pinMode(pinB, OUTPUT);
+    pinMode(pinC, OUTPUT); pinMode(pinD, OUTPUT);
+    pinMode(pinY, INPUT);
 
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(inputC, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // All 8 input combinations for 3-input AND
-  // Format: A, B, C => Expected Output
-
-  // 0 0 0 => 0
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 0 0 1 => 0
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 0 1 0 => 0
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 0 1 1 => 0
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 0 0 => 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 0 1 => 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 1 0 => 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 1 1 => 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7411 WORKING");
-    Serial.println("7411 WORKING");
-  } else {
-    display.println("7411 FAULTY");
-    Serial.println("7411 FAULTY");
-  }
-
-  display.display(); // <- Important to update screen
+    bool pass = true;
+    // Spot-check: all-low, one-high, three-high, all-high
+    auto check = [&](bool a, bool b, bool c, bool d, bool exp) {
+        digitalWrite(pinA, a); digitalWrite(pinB, b);
+        digitalWrite(pinC, c); digitalWrite(pinD, d);
+        delay(10);
+        if ((bool)digitalRead(pinY) != exp) pass = false;
+    };
+    check(LOW, LOW, LOW, LOW,   t0000);
+    check(LOW, LOW, LOW, HIGH,  t0001);
+    check(LOW, HIGH,HIGH,HIGH,  t0111);
+    check(HIGH,HIGH,HIGH,HIGH,  t1111);
+    return pass;
 }
 
-void check_7412() {
-  const int inputA = 2;    // IC pin 1
-  const int inputB = 25;   // IC pin 2
-  const int inputC = 27;   // IC pin 13
-  const int outputY = 26;  // IC pin 12
-
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(inputC, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // All 8 input combinations for 3-input NAND
-  // Format: A, B, C => Expected Output
-
-  // 0 0 0 => 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 0 0 1 => 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 0 1 0 => 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 0 1 1 => 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 0 0 => 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 0 1 => 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 1 0 => 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 1 1 => 0 (Only this input gives LOW output)
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7412 WORKING");
-    Serial.println("7412 WORKING");
-  } else {
-    display.println("7412 FAULTY");
-    Serial.println("7412 FAULTY");
-  }
-
-  display.display(); // <- Important to update screen
+void check_7420() {  // 4-input NAND
+    showResult("7420", test4Input(12,14,2,25,26, HIGH,HIGH,HIGH,LOW));
+}
+void check_7425() {  // 4-input NOR
+    showResult("7425", test4Input(12,14,2,25,26, HIGH,LOW,LOW,LOW));
 }
 
-void check_7415() {
-  const int inputA = 2;    // IC pin 1
-  const int inputB = 25;   // IC pin 2
-  const int inputC = 27;   // IC pin 13
-  const int outputY = 26;  // IC pin 12
+// AND-OR-INVERT gates (7451 / 7458) — struct-driven truth table
+void runAOI(int pinA, int pinB, int pinC, int pinD, int pinY,
+            const char* label,
+            bool t0000, bool t1100, bool t0011, bool t1111,
+            bool t1000, bool t0001) {
+    pinMode(pinA, OUTPUT); pinMode(pinB, OUTPUT);
+    pinMode(pinC, OUTPUT); pinMode(pinD, OUTPUT);
+    pinMode(pinY, INPUT);
 
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(inputC, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // All 8 input combinations for 3-input AND
-  // Format: A, B, C => Expected Output
-
-  // 0 0 0 => 0
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 0 0 1 => 0
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 0 1 0 => 0
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 0 1 1 => 0
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 0 0 => 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 0 1 => 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 1 0 => 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 1 1 => 1
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7415 WORKING");
-    Serial.println("7415 WORKING");
-  } else {
-    display.println("7415 FAULTY");
-    Serial.println("7415 FAULTY");
-  }
-
-  display.display(); // <- Important to update screen
-}
-
-void check_7420() {
-  const int inputA = 12;  // Pin 1
-  const int inputB = 14;  // Pin 2
-  const int inputC = 2;  // Pin 3
-  const int inputD = 25;   // Pin 4
-  const int outputY = 26; // Pin 6
-
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(inputC, OUTPUT);
-  pinMode(inputD, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // NAND Truth Table for 4 inputs: Y = !(A & B & C & D)
-
-  // 0000 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  digitalWrite(inputD, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 0001 -> 1
-  digitalWrite(inputD, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 0111 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, HIGH);
-  digitalWrite(inputD, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1111 -> 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, HIGH);
-  digitalWrite(inputD, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7420 WORKING");
-    Serial.println("7420 WORKING");
-  } else {
-    display.println("7420 FAULTY");
-    Serial.println("7420 FAULTY");
-  }
-
-  display.display();
-}
-
-void check_7425() {
-  const int inputA = 12;  // IC pin 1
-  const int inputB = 14;  // IC pin 2
-  const int inputC = 2;  // IC pin 3
-  const int inputD = 25;   // IC pin 4
-  const int outputY = 26; // IC pin 6
-
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(inputC, OUTPUT);
-  pinMode(inputD, OUTPUT);
-  pinMode(outputY, INPUT);  // Use pull-down if needed
-
-  bool testPass = true;
-
-  // Test Case 1: 0 0 0 0 -> Output should be 1 (HIGH)
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  digitalWrite(inputD, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // Test Case 2: 1 0 0 0 -> Output should be 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  digitalWrite(inputD, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // Test Case 3: 0 1 0 0 -> Output should be 0
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, LOW);
-  digitalWrite(inputD, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // Test Case 4: 1 1 1 1 -> Output should be 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, HIGH);
-  digitalWrite(inputD, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // Display result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7425 WORKING");
-    Serial.println("7425 WORKING");
-  } else {
-    display.println("7425 FAULTY");
-    Serial.println("7425 FAULTY");
-  }
-
-  display.display();
-}
-
-void check_7427() {
-  const int inputA = 27;  // IC pin 1
-  const int inputB = 2;  // IC pin 2
-  const int inputC = 25;  // IC pin 3
-  const int outputY = 26; // IC pin 6
-
-  pinMode(inputA, OUTPUT);
-  pinMode(inputB, OUTPUT);
-  pinMode(inputC, OUTPUT);
-  pinMode(outputY, INPUT);
-
-  bool testPass = true;
-
-  // NOR logic: Y = !(A + B + C)
-
-  // 0 0 0 -> 1
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != HIGH) testPass = false;
-
-  // 1 0 0 -> 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 0 1 0 -> 0
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, LOW);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 0 0 1 -> 0
-  digitalWrite(inputA, LOW);
-  digitalWrite(inputB, LOW);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // 1 1 1 -> 0
-  digitalWrite(inputA, HIGH);
-  digitalWrite(inputB, HIGH);
-  digitalWrite(inputC, HIGH);
-  delay(10);
-  if (digitalRead(outputY) != LOW) testPass = false;
-
-  // Show result
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  if (testPass) {
-    display.println("7427 WORKING");
-    Serial.println("7427 WORKING");
-  } else {
-    display.println("7427 FAULTY");
-    Serial.println("7427 FAULTY");
-  }
-
-  display.display();
+    struct TV { bool a,b,c,d,y; };
+    TV tests[] = {
+        {0,0,0,0,t0000}, {1,1,0,0,t1100},
+        {0,0,1,1,t0011}, {1,1,1,1,t1111},
+        {1,0,0,0,t1000}, {0,0,0,1,t0001}
+    };
+    bool pass = true;
+    for (auto& t : tests) {
+        digitalWrite(pinA, t.a); digitalWrite(pinB, t.b);
+        digitalWrite(pinC, t.c); digitalWrite(pinD, t.d);
+        delay(10);
+        if ((bool)digitalRead(pinY) != t.y) pass = false;
+    }
+    showResult(label, pass);
 }
 
 void check_7451() {
-  const int A = 14;  // IC pin 1
-  const int B = 27;  // IC pin 2
-  const int C = 2;  // IC pin 4
-  const int D = 25;  // IC pin 5
-  const int Y = 26;  // IC pin 6
-
-  pinMode(A, OUTPUT);
-  pinMode(B, OUTPUT);
-  pinMode(C, OUTPUT);
-  pinMode(D, OUTPUT);
-  pinMode(Y, INPUT);
-
-  bool testPass = true;
-
-  struct TestVector {
-    bool a, b, c, d;
-    bool expectedY;
-  };
-
-  TestVector tests[] = {
-    {0, 0, 0, 0, 1},
-    {1, 1, 0, 0, 0},
-    {0, 0, 1, 1, 0},
-    {1, 1, 1, 1, 0},
-    {1, 0, 0, 0, 1},
-    {0, 0, 0, 1, 1},
-  };
-
-  for (auto &t : tests) {
-    digitalWrite(A, t.a);
-    digitalWrite(B, t.b);
-    digitalWrite(C, t.c);
-    digitalWrite(D, t.d);
-    delay(10);
-    if (digitalRead(Y) != t.expectedY) testPass = false;
-  }
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  if (testPass) {
-    display.println("7451 WORKING");
-    Serial.println("7451 WORKING");
-  } else {
-    display.println("7451 FAULTY");
-    Serial.println("7451 FAULTY");
-  }
-  display.display();
+    runAOI(14,27,2,25,26, "7451", 1,0,0,0,1,1);
 }
-
 void check_7458() {
-  const int A = 14;  // IC pin 1
-  const int B = 27;  // IC pin 2
-  const int C = 2;  // IC pin 4
-  const int D = 25;  // IC pin 5
-  const int Y = 26;  // IC pin 6
-
-  pinMode(A, OUTPUT);
-  pinMode(B, OUTPUT);
-  pinMode(C, OUTPUT);
-  pinMode(D, OUTPUT);
-  pinMode(Y, INPUT);
-
-  bool testPass = true;
-
-  struct TestVector {
-    bool a, b, c, d;
-    bool expectedY;
-  };
-
-  TestVector tests[] = {
-    {0, 0, 0, 0, 0},
-    {1, 1, 0, 0, 1},
-    {0, 0, 1, 1, 1},
-    {1, 1, 1, 1, 1},
-    {1, 0, 0, 0, 0},
-    {0, 0, 0, 1, 0},
-  };
-
-  for (auto &t : tests) {
-    digitalWrite(A, t.a);
-    digitalWrite(B, t.b);
-    digitalWrite(C, t.c);
-    digitalWrite(D, t.d);
-    delay(10);
-    if (digitalRead(Y) != t.expectedY) testPass = false;
-  }
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  if (testPass) {
-    display.println("7458 WORKING");
-    Serial.println("7458 WORKING");
-  } else {
-    display.println("7458 FAULTY");
-    Serial.println("7458 FAULTY");
-  }
-  display.display();
+    runAOI(14,27,2,25,26, "7458", 0,1,1,1,0,0);
 }
 
 void check_74107() {
-  const int J = 12;     // Pin 1
-  const int K = 13;     // Pin 4
-  const int CLK = 32;   // Pin 12
-  const int RST = 33;   // Pin 13
-  const int Q = 25;     // Pin 2
+    const int J   = 12;
+    const int K   = 13;
+    const int CLK = 32;
+    const int RST = 33;
+    const int Q   = 25;
 
-  pinMode(J, OUTPUT);
-  pinMode(K, OUTPUT);
-  pinMode(CLK, OUTPUT);
-  pinMode(RST, OUTPUT);
-  pinMode(Q, INPUT);
+    pinMode(J, OUTPUT); pinMode(K, OUTPUT);
+    pinMode(CLK, OUTPUT); pinMode(RST, OUTPUT);
+    pinMode(Q, INPUT);
 
-  bool testPass = true;
+    bool pass = true;
 
-  // Apply async reset
-  digitalWrite(RST, LOW); delay(10);  // Reset active
-  digitalWrite(RST, HIGH);            // Release reset
-  delay(10);
+    digitalWrite(RST, LOW); delay(10);
+    digitalWrite(RST, HIGH); delay(10);
 
-  // Test Set: J=1, K=0
-  digitalWrite(J, HIGH);
-  digitalWrite(K, LOW);
-  digitalWrite(CLK, HIGH); delay(5);  // Ensure high before falling edge
-  digitalWrite(CLK, LOW); delay(10);
-  if (digitalRead(Q) != HIGH) testPass = false;
+    // Set: J=1 K=0
+    digitalWrite(J, HIGH); digitalWrite(K, LOW);
+    digitalWrite(CLK, HIGH); delay(5);
+    digitalWrite(CLK, LOW); delay(10);
+    if (digitalRead(Q) != HIGH) pass = false;
 
-  // Test Reset: J=0, K=1
-  digitalWrite(J, LOW);
-  digitalWrite(K, HIGH);
-  digitalWrite(CLK, HIGH); delay(5);
-  digitalWrite(CLK, LOW); delay(10);
-  if (digitalRead(Q) != LOW) testPass = false;
+    // Reset: J=0 K=1
+    digitalWrite(J, LOW); digitalWrite(K, HIGH);
+    digitalWrite(CLK, HIGH); delay(5);
+    digitalWrite(CLK, LOW); delay(10);
+    if (digitalRead(Q) != LOW) pass = false;
 
-  // Test Toggle: J=1, K=1
-  digitalWrite(J, HIGH);
-  digitalWrite(K, HIGH);
-  digitalWrite(CLK, HIGH); delay(5);
-  digitalWrite(CLK, LOW); delay(10);
-  bool firstToggle = digitalRead(Q);
-  digitalWrite(CLK, HIGH); delay(5);
-  digitalWrite(CLK, LOW); delay(10);
-  bool secondToggle = digitalRead(Q);
-  if (firstToggle == secondToggle) testPass = false;
+    // Toggle: J=1 K=1 (two clocks must give opposite Q)
+    digitalWrite(J, HIGH); digitalWrite(K, HIGH);
+    digitalWrite(CLK, HIGH); delay(5);
+    digitalWrite(CLK, LOW); delay(10);
+    bool q1 = digitalRead(Q);
+    digitalWrite(CLK, HIGH); delay(5);
+    digitalWrite(CLK, LOW); delay(10);
+    bool q2 = digitalRead(Q);
+    if (q1 == q2) pass = false;
 
-  // Display Result
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  if (testPass) {
-    display.println("74107 WORKING");
-    Serial.println("74107 WORKING");
-  } else {
-    display.println("74107 FAULTY");
-    Serial.println("74107 FAULTY");
-  }
-  display.display();
+    showResult("74107", pass);
 }
 
+// ─────────────────────────────────────────────
+// TRANSISTOR TESTING
+// ─────────────────────────────────────────────
 
+// Shared pin-pair test used by check_npn and check_pnp
+// Returns true if the transistor conducts as expected
+bool transistorPairTest(int collector, int emitter, bool isNPN) {
+    pinMode(collector, OUTPUT); digitalWrite(collector, HIGH);
+    pinMode(emitter, INPUT);
+    pinMode(M, OUTPUT);
 
-void check_npn(){
+    // With base HIGH
+    digitalWrite(M, HIGH); delay(10);
+    bool withBase = digitalRead(emitter);
 
+    // With base LOW
+    digitalWrite(M, LOW); delay(10);
+    bool withoutBase = digitalRead(emitter);
 
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("NPN Transistor Test");
-
-  bool detected = false;
-
-  // ----- Test 1: Collector = Left (L), Emitter = Right (R) -----
-  pinMode(L, OUTPUT); digitalWrite(L, HIGH); // Collector = HIGH
-  pinMode(R, INPUT);
-  pinMode(M, OUTPUT); digitalWrite(M, HIGH); // Base = HIGH
-  delay(10);
-  bool voltage1 = digitalRead(R);  // Should be LOW if current flows
-
-  pinMode(L, OUTPUT); digitalWrite(L, HIGH); // Collector = HIGH
-  pinMode(R, INPUT);
-  pinMode(M, OUTPUT); digitalWrite(M, LOW); // Base = HIGH
-  delay(10);
-  bool voltage01 = digitalRead(R);  // Should be LOW if current flows
-
-  if (voltage1 == true && voltage01 == false) {
-    display.println("NPN Transistor:");
-    display.println("C = Left");
-    display.println("E = Right");
-    detected = true;
-  }
-
-  // ----- Test 2: Collector = Right (R), Emitter = Left (L) -----
-  pinMode(L, INPUT); 
-  pinMode(R, OUTPUT); digitalWrite(R, HIGH); // Collector = HIGH
-  pinMode(M, OUTPUT); digitalWrite(M, HIGH); // Base = HIGH
-  delay(10);
-  bool voltage2 = digitalRead(L);  // Should be LOW if current flows
-
-  pinMode(L, INPUT); 
-  pinMode(R, OUTPUT); digitalWrite(R, HIGH); // Collector = HIGH
-  pinMode(M, OUTPUT); digitalWrite(M, LOW); // Base = HIGH
-  delay(10);
-  bool voltage02 = digitalRead(L);  // Should be LOW if current flows
-
-  if (!detected && voltage2 == true && voltage02 == false) {
-    display.println("NPN Transistor:");
-    display.println("C = Right");
-    display.println("E = Left");
-    detected = true;
-  }
-
-  if (!detected) {
-    display.println("No conduction");
-    display.println("Not NPN or damaged");
-  }
-
-  display.display();
-
+    if (isNPN)  return (withBase == true  && withoutBase == false);
+    else        return (withBase == false && withoutBase == true);
 }
 
-void check_pnp(){
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("PNP Transistor Test");
+void check_npn() {
+    dispBegin();
+    display.println("NPN Transistor Test");
 
-  bool detected = false;
+    bool detected = false;
 
-  // ----- Test 1: Collector = Left (L), Emitter = Right (R) -----
-  pinMode(L, OUTPUT); digitalWrite(L, HIGH); // Collector = HIGH
-  pinMode(R, INPUT);
-  pinMode(M, OUTPUT); digitalWrite(M, HIGH); // Base = HIGH
-  delay(10);
-  bool voltage1 = digitalRead(R);  // Should be LOW if current flows
+    if (transistorPairTest(L, R, true)) {
+        display.println("NPN: C=Left E=Right");
+        detected = true;
+    } else if (transistorPairTest(R, L, true)) {
+        display.println("NPN: C=Right E=Left");
+        detected = true;
+    }
 
-  pinMode(L, OUTPUT); digitalWrite(L, HIGH); // Collector = HIGH
-  pinMode(R, INPUT);
-  pinMode(M, OUTPUT); digitalWrite(M, LOW); // Base = HIGH
-  delay(10);
-  bool voltage01 = digitalRead(R);  // Should be LOW if current flows
-
-  if (voltage1 == false && voltage01 == true) {
-    display.println("PNP Transistor:");
-    display.println("C = Left");
-    display.println("E = Right");
-    detected = true;
-  }
-
-  // ----- Test 2: Collector = Right (R), Emitter = Left (L) -----
-  pinMode(L, INPUT); 
-  pinMode(R, OUTPUT); digitalWrite(R, HIGH); // Collector = HIGH
-  pinMode(M, OUTPUT); digitalWrite(M, HIGH); // Base = HIGH
-  delay(10);
-  bool voltage2 = digitalRead(L);  // Should be LOW if current flows
-
-  pinMode(L, INPUT); 
-  pinMode(R, OUTPUT); digitalWrite(R, HIGH); // Collector = HIGH
-  pinMode(M, OUTPUT); digitalWrite(M, LOW); // Base = HIGH
-  delay(10);
-  bool voltage02 = digitalRead(L);  // Should be LOW if current flows
-
-  if (!detected && voltage2 == false && voltage02 == true) {
-    display.println("PNP Transistor:");
-    display.println("C = Right");
-    display.println("E = Left");
-    detected = true;
-  }
-
-  if (!detected) {
-    display.println("No conduction");
-    display.println("Not PNP or damaged");
-  }
-
-  display.display();
-
+    if (!detected) {
+        display.println("No conduction");
+        display.println("Not NPN or damaged");
+    }
+    display.display();
 }
 
-void TEST(){
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("Test");
+void check_pnp() {
+    dispBegin();
+    display.println("PNP Transistor Test");
 
-  bool detected = false;
-  // ----- Test 1: Collector = Left (L), Emitter = Right (R) -----
-  pinMode(L, OUTPUT); digitalWrite(L, HIGH); // Collector = HIGH
-  pinMode(R, INPUT);
-  pinMode(M, OUTPUT); digitalWrite(M, HIGH); // Base = HIGH
-  delay(10);
-  bool voltage10 = digitalRead(R);  // Should be LOW if current flows
+    bool detected = false;
 
-  pinMode(L, OUTPUT); digitalWrite(L, HIGH); // Collector = HIGH
-  pinMode(R, INPUT);
-  pinMode(M, OUTPUT); digitalWrite(M, LOW); // Base = HIGH
-  delay(10);
-  bool voltage010 = digitalRead(R);  // Should be LOW if current flows
+    if (transistorPairTest(L, R, false)) {
+        display.println("PNP: C=Left E=Right");
+        detected = true;
+    } else if (transistorPairTest(R, L, false)) {
+        display.println("PNP: C=Right E=Left");
+        detected = true;
+    }
 
-  if (voltage10 == false && voltage010 == true) {
-    display.println("PNP Transistor:");
-    display.println("C = Left");
-    display.println("E = Right");
-    detected = true;
-  }
-
-  // ----- Test 2: Collector = Right (R), Emitter = Left (L) -----
-  pinMode(L, INPUT); 
-  pinMode(R, OUTPUT); digitalWrite(R, HIGH); // Collector = HIGH
-  pinMode(M, OUTPUT); digitalWrite(M, HIGH); // Base = HIGH
-  delay(10);
-  bool voltage20 = digitalRead(L);  // Should be LOW if current flows
-
-  pinMode(L, INPUT); 
-  pinMode(R, OUTPUT); digitalWrite(R, HIGH); // Collector = HIGH
-  pinMode(M, OUTPUT); digitalWrite(M, LOW); // Base = HIGH
-  delay(10);
-  bool voltage020 = digitalRead(L);  // Should be LOW if current flows
-
-  if (!detected && voltage20 == false && voltage020 == true) {
-    display.println("PNP Transistor:");
-    display.println("C = Right");
-    display.println("E = Left");
-    detected = true;
-  }
-
-  // ----- Test 1: Collector = Left (L), Emitter = Right (R) -----
-  pinMode(L, OUTPUT); digitalWrite(L, HIGH); // Collector = HIGH
-  pinMode(R, INPUT);
-  pinMode(M, OUTPUT); digitalWrite(M, HIGH); // Base = HIGH
-  delay(10);
-  bool voltage1 = digitalRead(R);  // Should be LOW if current flows
-
-  pinMode(L, OUTPUT); digitalWrite(L, HIGH); // Collector = HIGH
-  pinMode(R, INPUT);
-  pinMode(M, OUTPUT); digitalWrite(M, LOW); // Base = HIGH
-  delay(10);
-  bool voltage01 = digitalRead(R);  // Should be LOW if current flows
-
-  if (!detected && voltage1 == true && voltage01 == false) {
-    display.println("NPN Transistor:");
-    display.println("C = Left");
-    display.println("E = Right");
-    detected = true;
-  }
-
-  // ----- Test 2: Collector = Right (R), Emitter = Left (L) -----
-  pinMode(L, INPUT); 
-  pinMode(R, OUTPUT); digitalWrite(R, HIGH); // Collector = HIGH
-  pinMode(M, OUTPUT); digitalWrite(M, HIGH); // Base = HIGH
-  delay(10);
-  bool voltage2 = digitalRead(L);  // Should be LOW if current flows
-
-  pinMode(L, INPUT); 
-  pinMode(R, OUTPUT); digitalWrite(R, HIGH); // Collector = HIGH
-  pinMode(M, OUTPUT); digitalWrite(M, LOW); // Base = HIGH
-  delay(10);
-  bool voltage02 = digitalRead(L);  // Should be LOW if current flows
-
-  if (!detected && voltage2 == true && voltage02 == false) {
-    display.println("NPN Transistor:");
-    display.println("C = Right");
-    display.println("E = Left");
-    detected = true;
-  }
-
-  if (!detected) {
-    display.println("No conduction");
-    display.println("Not NPN/PNP or damaged");
-  }
-
-  display.display();
+    if (!detected) {
+        display.println("No conduction");
+        display.println("Not PNP or damaged");
+    }
+    display.display();
 }
+
+// TEST() now just calls check_pnp then check_npn if nothing detected
+void TEST() {
+    dispBegin();
+    display.println("Test");
+
+    bool detected = false;
+
+    // Try PNP first
+    if (transistorPairTest(L, R, false)) {
+        display.println("PNP: C=Left E=Right"); detected = true;
+    } else if (transistorPairTest(R, L, false)) {
+        display.println("PNP: C=Right E=Left"); detected = true;
+    }
+
+    // Try NPN if PNP not detected
+    if (!detected && transistorPairTest(L, R, true)) {
+        display.println("NPN: C=Left E=Right"); detected = true;
+    } else if (!detected && transistorPairTest(R, L, true)) {
+        display.println("NPN: C=Right E=Left"); detected = true;
+    }
+
+    if (!detected) {
+        display.println("No conduction");
+        display.println("Not NPN/PNP or damaged");
+    }
+    display.display();
+}
+
+// ─────────────────────────────────────────────
+// MEASUREMENT FUNCTIONS
+// ─────────────────────────────────────────────
 
 void measureVoltage() {
     Serial.println("Measuring Voltage...");
-    
-    while (true) {  
-        displayModes1();  
-        
-        // UP Button (Scroll Up)
+    while (true) {
+        displayModes1();
         delay(200);
         if (digitalRead(UP_BUTTON) == HIGH) {
-            if (mode_index1 > 0) {
-                mode_index1--;
-                delay(200);  // Debounce delay
-            }
+            if (mode_index1 > 0) { mode_index1--; delay(200); }
         }
-
-        // DOWN Button (Scroll Down)
         if (digitalRead(DOWN_BUTTON) == HIGH) {
-            if (mode_index1 < total_modes1 - 1) {
-                mode_index1++;
-                delay(200);  // Debounce delay
-            }
+            if (mode_index1 < total_modes1 - 1) { mode_index1++; delay(200); }
         }
-
-        // NEXT Button (Select Mode)
         if (digitalRead(NEXT_BUTTON) == HIGH) {
             executeMode1(mode_index1);
-            break; 
+            break;
         }
-        
-        delay(50);  // Small delay to prevent overwhelming the CPU
+        delay(50);
     }
 }
 
 void measureCurrent() {
- ACS.autoMidPoint();  // Automatically calibrate the zero-current voltage
+    ACS.autoMidPoint();
+    while (true) {
+        int current_mA = ACS.mA_DC();
+        Serial.print("Current: "); Serial.print(current_mA); Serial.println(" mA");
 
-  while (true) {
-    int current_mA = ACS.mA_DC();  // Measure DC current in milliamps
-
-    Serial.print("Current: ");
-    Serial.print(current_mA);
-    Serial.println(" mA");
-
-    // Optional: Display on OLED
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.print("Current: ");
-    display.print(current_mA);
-    display.println(" mA");
-    display.display();
-
-    delay(200);
-  }
-
-}
-
-void measureVoltage3() {
-    while(true){
-      int adcValue = analogRead(VOLTAGE_PIN);
-  float vNode = adcValue * (ADC_REF / ADC_RES);  // Voltage at GPIO15
-  float vin = vNode * (1.0 + (R04 / R02));          // Calculate original input voltage
-
-  Serial.print("ADC Value: "); Serial.println(adcValue);
-  Serial.print("Vnode: "); Serial.print(vNode, 3); Serial.println(" V");
-  Serial.print("Vin (calculated): "); Serial.print(vin, 3); Serial.println(" V");
-
-  // Optional OLED display
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.print("Vin: ");
-  display.print(vin, 2);
-  display.println(" V");
-  display.display();
-  delay(200);
+        dispBegin();
+        display.print("Current: ");
+        display.print(current_mA);
+        display.println(" mA");
+        display.display();
+        delay(200);
     }
 }
 
-void measureVoltage9() {
-    while(true){
-      int adcValue = analogRead(VOLTAGE_PIN);
-  float vNode = adcValue * (ADC_REF / ADC_RES);  // Voltage at GPIO15
-  float vin = vNode * (1.0 + (R01 / R02));          // Calculate original input voltage
+// Unified voltage range measurement — replaces measureVoltage3/9/15
+void measureVoltageRange(float Rtop, float Rbot) {
+    while (true) {
+        int adcValue = analogRead(VOLTAGE_PIN);
+        float vNode = adcValue * (ADC_REF / ADC_RES);
+        float vin = vNode * (1.0 + (Rtop / Rbot));
 
-  Serial.print("ADC Value: "); Serial.println(adcValue);
-  Serial.print("Vnode: "); Serial.print(vNode, 3); Serial.println(" V");
-  Serial.print("Vin (calculated): "); Serial.print(vin, 3); Serial.println(" V");
+        Serial.print("ADC Value: "); Serial.println(adcValue);
+        Serial.print("Vnode: ");     Serial.print(vNode, 3); Serial.println(" V");
+        Serial.print("Vin: ");       Serial.print(vin, 3);   Serial.println(" V");
 
-  // Optional OLED display
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.print("Vin: ");
-  display.print(vin, 2);
-  display.println(" V");
-  display.display();
-  delay(200);
+        dispBegin();
+        display.print("Vin: ");
+        display.print(vin, 2);
+        display.println(" V");
+        display.display();
+        delay(200);
     }
 }
 
-void measureVoltage15() {
-    while(true){
-      int adcValue = analogRead(VOLTAGE_PIN);
-  float vNode = adcValue * (ADC_REF / ADC_RES);  // Voltage at GPIO15
-  float vin = vNode * (1.0 + (R03 / R02));          // Calculate original input voltage
-
-  Serial.print("ADC Value: "); Serial.println(adcValue);
-  Serial.print("Vnode: "); Serial.print(vNode, 3); Serial.println(" V");
-  Serial.print("Vin (calculated): "); Serial.print(vin, 3); Serial.println(" V");
-
-  // Optional OLED display
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.print("Vin: ");
-  display.print(vin, 2);
-  display.println(" V");
-  display.display();
-  delay(200);
-    }
-}
-
+// Kept for compatibility — called via executeMode1
+void measureVoltage3()  { measureVoltageRange(R04, R02); }
+void measureVoltage9()  { measureVoltageRange(R01, R02); }
+void measureVoltage15() { measureVoltageRange(R03, R02); }
 
 void measureResistance() {
-  while (true) {
-    float Vout, R_unknown;
-    String label = "Invalid";
+    while (true) {
+        float Vout, R_unknown;
+        String label = "Invalid";
 
-    // Lambda functions
-    auto activate = [](int pin) {
-      pinMode(BASE1, INPUT);
-      pinMode(BASE2, INPUT);
-      pinMode(BASE3, INPUT);
-      pinMode(pin, OUTPUT);
-      digitalWrite(pin, HIGH);
-    };
+        auto activate = [](int pin) {
+            pinMode(BASE1, INPUT); pinMode(BASE2, INPUT); pinMode(BASE3, INPUT);
+            pinMode(pin, OUTPUT); digitalWrite(pin, HIGH);
+        };
+        auto readVoltage = []() {
+            return analogRead(ADC_PIN) * (ADC_REF / ADC_RES);
+        };
+        auto calcR = [](float Vout, float R_known) -> float {
+            if (Vout <= 0.01 || Vout >= V_IN) return -1.0;
+            return (R_known * Vout) / (V_IN - Vout);
+        };
 
-    auto readVoltage = []() {
-      int adcValue = analogRead(ADC_PIN);
-      return adcValue * (ADC_REF / ADC_RES);
-    };
+        activate(BASE1); delay(100);
+        Vout = readVoltage(); R_unknown = calcR(Vout, R1);
+        if (R_unknown > 0 && R_unknown < 8000) label = "1k Ref";
+        else {
+            activate(BASE2); delay(100);
+            Vout = readVoltage(); R_unknown = calcR(Vout, R2);
+            if (R_unknown >= 8000 && R_unknown < 80000) label = "10k Ref";
+            else {
+                activate(BASE3); delay(100);
+                Vout = readVoltage(); R_unknown = calcR(Vout, R3);
+                if (R_unknown >= 80000 && R_unknown < 150000) label = "100k Ref";
+                else R_unknown = -1;
+            }
+        }
 
-    auto calcResistance = [](float Vout, float R_known) -> float {
-      if (Vout <= 0.01 || Vout >= V_IN) return -1.0;
-      return (R_known * Vout) / (V_IN - Vout);
-    };
+        pinMode(BASE1, INPUT); pinMode(BASE2, INPUT); pinMode(BASE3, INPUT);
+        Serial.println("------");
 
-    // Try 1k
-    activate(BASE1);
-    delay(100);
-    Vout = readVoltage();
-    R_unknown = calcResistance(Vout, R1);
-    if (R_unknown > 0 && R_unknown < 8000) label = "1k Ref";
-    else {
-      activate(BASE2);
-      delay(100);
-      Vout = readVoltage();
-      R_unknown = calcResistance(Vout, R2);
-      if (R_unknown >= 8000 && R_unknown < 80000) label = "10k Ref";
-      else {
-        activate(BASE3);
-        delay(100);
-        Vout = readVoltage();
-        R_unknown = calcResistance(Vout, R3);
-        if (R_unknown >= 80000 && R_unknown < 150000) label = "100k Ref";
-        else R_unknown = -1;
-      }
+        display.clearDisplay();
+        if (R_unknown > 0) {
+            Serial.print("Ref: "); Serial.println(label);
+            Serial.print("Voltage: "); Serial.println(Vout);
+            Serial.print("R: "); Serial.print(R_unknown); Serial.println(" ohms");
+
+            display.setCursor(0, 0);  display.println("Resistance Measured:");
+            display.setCursor(0, 10); display.print(R_unknown, 0); display.println(" ohms");
+            display.setCursor(0, 22); display.print("Using "); display.println(label);
+        } else {
+            Serial.println("No valid range.");
+            display.setCursor(0, 0);  display.println("Invalid Range!");
+            display.setCursor(0, 10); display.println("Check connection");
+        }
+        display.display();
+        delay(1000);
     }
-
-    pinMode(BASE1, INPUT);
-    pinMode(BASE2, INPUT);
-    pinMode(BASE3, INPUT);
-
-    Serial.println("------");
-    display.clearDisplay();
-
-    if (R_unknown > 0) {
-      Serial.print("Ref Used: "); Serial.println(label);
-      Serial.print("Voltage: "); Serial.println(Vout);
-      Serial.print("Resistance: "); Serial.print(R_unknown); Serial.println(" ohms");
-
-      display.setCursor(0, 0);
-      display.println("Resistance Measured:");
-      display.setCursor(0, 10);
-      display.print(R_unknown, 0);
-      display.println(" ohms");
-      display.setCursor(0, 22);
-      display.print("Using "); display.println(label);
-    } else {
-      Serial.println("No valid range.");
-      display.setCursor(0, 0);
-      display.println("Invalid Range!");
-      display.setCursor(0, 10);
-      display.println("Check connection");
-    }
-
-    display.display();
-    delay(1000);
-  }
 }
 
-
 void measureCapacitance() {
-  while(true){
+    const int targetADC = (int)(0.63 * ADC_MAX);
+    while (true) {
+        Serial.println("Measuring Capacitance...");
 
+        pinMode(chargePin, OUTPUT); pinMode(dischargePin, OUTPUT);
+        digitalWrite(chargePin, LOW); digitalWrite(dischargePin, LOW);
+        delay(500);
 
-  const int chargePin = 5;
-  const int dischargePin = 2;
-  const int analogPin = 34;
-  const float Rc = 1500.0;  // 1.5k Ohm
-  const int ADC_MAX = 4095;
-  const float Vcc = 3.3;
-  const int targetADC = (int)(0.63 * ADC_MAX);  // ~2580 for 3.3V
+        pinMode(dischargePin, INPUT);
+        digitalWrite(chargePin, HIGH);
 
-  Serial.println("Measuring Capacitance...");
+        unsigned long startTime = micros();
+        while (analogRead(analogPin) < targetADC) {
+            if ((micros() - startTime) > 3000000) break;
+        }
+        unsigned long elapsedTime = micros() - startTime;
 
-  // Step 1: Discharge the capacitor
-  pinMode(chargePin, OUTPUT);
-  pinMode(dischargePin, OUTPUT);
-  digitalWrite(chargePin, LOW);
-  digitalWrite(dischargePin, LOW);
-  delay(500);
+        float capacitance = ((float)elapsedTime / Rc) * 0.7692;
 
-  // Step 2: Begin charging
-  pinMode(dischargePin, INPUT);   // Disconnect discharge
-  digitalWrite(chargePin, HIGH);  // Start charging
+        Serial.print("Elapsed: "); Serial.print(elapsedTime); Serial.println(" us");
+        Serial.print("Capacitance: "); Serial.print(capacitance, 3); Serial.println(" uF");
 
-  // Step 3: Time until 63% Vcc is reached
-  unsigned long startTime = micros();
-  while (analogRead(analogPin) < targetADC) {
-    if ((micros() - startTime) > 3000000) break;  // Timeout after 3s
-  }
-  unsigned long elapsedTime = micros() - startTime;
-
-  // Step 4: Calculate capacitance in µF
-  float capacitance = (float)elapsedTime / Rc;
-  capacitance *= 0.7692; // µF, because time is in µs and R in ohms
-
-  // Debug output
-  Serial.print("Elapsed Time: ");
-  Serial.print(elapsedTime);
-  Serial.println(" us");
-
-  Serial.print("Capacitance: ");
-  Serial.print(capacitance, 3);
-  Serial.println(" uF");
-
-  // OLED Display Output
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("Capacitance:");
-  display.setCursor(0, 10);
-  display.print(capacitance, 2);
-  display.println(" uF");
-  display.display();
-
-  delay(2000);
-  }
+        dispBegin();
+        display.println("Capacitance:");
+        display.setCursor(0, 10);
+        display.print(capacitance, 2);
+        display.println(" uF");
+        display.display();
+        delay(2000);
+    }
 }
 
 void continuity() {
-    analogReadResolution(12);   // 12-bit ADC (0–4095)
-  const float ADC_REF = 3.3;  // Reference voltage
-  const int ADC_RES = 4095;
+    analogReadResolution(12);
+    const float AREF = 3.3;
+    const int   ARES = 4095;
 
-  while (true) {
-    int adcValue = analogRead(CONTINUITY_PIN);
-    float voltage = adcValue * (ADC_REF / ADC_RES);
+    while (true) {
+        int adcValue = analogRead(CONTINUITY_PIN);
+        float voltage = adcValue * (AREF / ARES);
 
-    Serial.print("Voltage: ");
-    Serial.print(voltage, 3);
-    Serial.print(" V - ");
+        Serial.print("Voltage: "); Serial.print(voltage, 3); Serial.print(" V - ");
 
-    if (voltage > CONTINUITY_THRESHOLD) {
-      Serial.println("Continuity Detected!");
-      
-      display.clearDisplay();
-      display.setCursor(0, 0);
-      display.print("Continuity OK");
-      display.display();
-    } else {
-      Serial.println("No Continuity");
-      
-      display.clearDisplay();
-      display.setCursor(0, 0);
-      display.print("No Continuity");
-      display.display();
+        display.clearDisplay();
+        display.setCursor(0, 0);
+        if (voltage > CONTINUITY_THRESHOLD) {
+            Serial.println("Continuity Detected!");
+            display.print("Continuity OK");
+        } else {
+            Serial.println("No Continuity");
+            display.print("No Continuity");
+        }
+        display.display();
+        delay(300);
     }
-
-    delay(300);  // Delay between readings
-  }
 }
 
+// ─────────────────────────────────────────────
+// SUB-MENU NAVIGATORS
+// ─────────────────────────────────────────────
 
-void testIC() {
-    while (true) {  
-        displayModes3();  
-        
-        // UP Button (Scroll Up)
+// Generic sub-menu loop — used by testIC, testTransistor, measureVoltage
+void runSubMenu(const char** modes, int total, int& index,
+                void (*displayFn)(), void (*executeFn)(int)) {
+    while (true) {
+        displayFn();
         delay(200);
         if (digitalRead(UP_BUTTON) == HIGH) {
-            if (mode_index3 > 0) {
-                mode_index3--;
-                delay(200);  // Debounce delay
-            }
+            if (index > 0) { index--; delay(200); }
         }
-
-        // DOWN Button (Scroll Down)
         if (digitalRead(DOWN_BUTTON) == HIGH) {
-            if (mode_index3 < total_modes3 - 1) {
-                mode_index3++;
-                delay(200);  // Debounce delay
-            }
+            if (index < total - 1) { index++; delay(200); }
         }
-
-        // NEXT Button (Select Mode)
         if (digitalRead(NEXT_BUTTON) == HIGH) {
-            executeMode3(mode_index3);
-            break; 
+            executeFn(index);
+            break;
         }
-        
-        delay(50);  // Small delay to prevent overwhelming the CPU
+        delay(50);
     }
+}
+
+void testIC() {
+    runSubMenu(ic_modes, total_modes3, mode_index3, displayModes3, executeMode3);
 }
 
 void testTransistor() {
-    while (true) {  
-        displayModes2();  
-        
-        // UP Button (Scroll Up)
-        delay(200);
-        if (digitalRead(UP_BUTTON) == HIGH) {
-            if (mode_index2 > 0) {
-                mode_index2--;
-                delay(200);  // Debounce delay
-            }
+    runSubMenu(transistor_modes, total_modes2, mode_index2, displayModes2, executeMode2);
+}
+
+// ─────────────────────────────────────────────
+// NEW IC TESTS — EXISTING PINS ONLY
+// ─────────────────────────────────────────────
+
+// 7426 — Quad 2-input NAND (open-collector, high voltage)
+// Same pinout and logic as 7400. Test is identical.
+void check_7426() { showResult("7426", test2Input(2,25,26, HIGH,HIGH,HIGH,LOW)); }
+
+// 7428 — Quad 2-input NOR buffer
+// Same pinout as 7402 (Y,A,B order). NOR logic: same as 7402.
+void check_7428() { showResult("7428", test2Input(26,25,2, HIGH,LOW,LOW,LOW)); }
+
+// 7433 — Quad 2-input NOR (open-collector)
+// Same pinout as 7402. Same NOR logic.
+void check_7433() { showResult("7433", test2Input(26,25,2, HIGH,LOW,LOW,LOW)); }
+
+// 7437 — Quad 2-input NAND buffer
+// Same pinout and logic as 7400.
+void check_7437() { showResult("7437", test2Input(2,25,26, HIGH,HIGH,HIGH,LOW)); }
+
+// 7438 — Quad 2-input NAND (open-collector)
+// Same pinout and logic as 7400.
+void check_7438() { showResult("7438", test2Input(2,25,26, HIGH,HIGH,HIGH,LOW)); }
+
+// 74266 — Quad 2-input XNOR (open-collector)
+// Same pinout as 7486. XNOR truth table: 00→1, 01→0, 10→0, 11→1
+void check_74266() { showResult("74266", test2Input(2,25,26, HIGH,LOW,LOW,HIGH)); }
+
+// 7430 — 8-input NAND gate
+// IC pins 1-6 (GPIO 12,14,27,2,25,26) = inputs A-F
+// IC pin 9 (GPIO32) = input G,  IC pin 10 (GPIO33) = input H
+// IC pin 8 (GPIO35) = output Y
+// Y = LOW only when ALL 8 inputs HIGH
+void check_7430() {
+    const int inPins[] = {12, 14, 27, 2, 25, 26, 32, 33};
+    const int outPin = 35;
+
+    for (int i = 0; i < 8; i++) pinMode(inPins[i], OUTPUT);
+    pinMode(outPin, INPUT);
+
+    bool pass = true;
+
+    // All LOW → output HIGH
+    for (int i = 0; i < 8; i++) digitalWrite(inPins[i], LOW);
+    delay(10);
+    if (digitalRead(outPin) != HIGH) pass = false;
+
+    // All HIGH → output LOW
+    for (int i = 0; i < 8; i++) digitalWrite(inPins[i], HIGH);
+    delay(10);
+    if (digitalRead(outPin) != LOW) pass = false;
+
+    // One LOW → output HIGH
+    digitalWrite(inPins[0], LOW);
+    delay(10);
+    if (digitalRead(outPin) != HIGH) pass = false;
+
+    showResult("7430", pass);
+}
+
+// ─────────────────────────────────────────────
+// NEW IC TESTS — USES IC PIN12 (GPIO4) + PIN13 (GPIO5)
+// ─────────────────────────────────────────────
+
+// 7421 — Dual 4-input AND gate
+// IC pin 1(GPIO12)=A1, 2(GPIO14)=B1, 3(GPIO27)=NC, 4(GPIO2)=C1, 5(GPIO25)=D1, 6(GPIO26)=Y1
+// IC pin 8(GPIO35)=Y2, 9(GPIO32)=A2, 10(GPIO33)=B2, 11(GPIO13)=NC, 12(GPIO4)=C2, 13(GPIO5)=D2
+void check_7421() {
+    const int A1=12, B1=14, C1=2,  D1=25, Y1=26;
+    const int Y2=35, A2=32, B2=33, C2=IC_PIN12, D2=IC_PIN13;
+
+    pinMode(A1,OUTPUT); pinMode(B1,OUTPUT); pinMode(C1,OUTPUT); pinMode(D1,OUTPUT);
+    pinMode(Y1,INPUT);
+    pinMode(A2,OUTPUT); pinMode(B2,OUTPUT); pinMode(C2,OUTPUT); pinMode(D2,OUTPUT);
+    pinMode(Y2,INPUT);
+
+    bool pass = true;
+
+    // Gate 1: all LOW → LOW
+    digitalWrite(A1,LOW); digitalWrite(B1,LOW); digitalWrite(C1,LOW); digitalWrite(D1,LOW);
+    delay(10);
+    if (digitalRead(Y1) != LOW)  pass = false;
+
+    // Gate 1: all HIGH → HIGH
+    digitalWrite(A1,HIGH); digitalWrite(B1,HIGH); digitalWrite(C1,HIGH); digitalWrite(D1,HIGH);
+    delay(10);
+    if (digitalRead(Y1) != HIGH) pass = false;
+
+    // Gate 1: one LOW → LOW
+    digitalWrite(A1,LOW);
+    delay(10);
+    if (digitalRead(Y1) != LOW)  pass = false;
+
+    // Gate 2: all HIGH → HIGH
+    digitalWrite(A2,HIGH); digitalWrite(B2,HIGH); digitalWrite(C2,HIGH); digitalWrite(D2,HIGH);
+    delay(10);
+    if (digitalRead(Y2) != HIGH) pass = false;
+
+    // Gate 2: one LOW → LOW
+    digitalWrite(A2,LOW);
+    delay(10);
+    if (digitalRead(Y2) != LOW)  pass = false;
+
+    showResult("7421", pass);
+}
+
+// 7474 — Dual D Flip-Flop (positive edge triggered)
+// IC pin 1(GPIO12)=1CLR, 2(GPIO14)=1D, 3(GPIO27)=1CLK, 4(GPIO2)=1PR
+// IC pin 5(GPIO25)=1Q,   6(GPIO26)=1/Q
+// IC pin 8(GPIO35)=2/Q,  9(GPIO32)=2Q, 10(GPIO33)=2PR, 11(GPIO13)=2CLK
+// IC pin 12(GPIO4)=2D,   13(GPIO5)=2CLR
+void check_7474() {
+    const int CLR1=12, D1=14, CLK1=27, PR1=2, Q1=25, NQ1=26;
+    const int NQ2=35,  Q2=32, PR2=33,  CLK2=13;
+    const int D2=IC_PIN12, CLR2=IC_PIN13;
+
+    pinMode(CLR1,OUTPUT); pinMode(D1,OUTPUT); pinMode(CLK1,OUTPUT); pinMode(PR1,OUTPUT);
+    pinMode(Q1,INPUT);    pinMode(NQ1,INPUT);
+    pinMode(NQ2,INPUT);   pinMode(Q2,INPUT);
+    pinMode(PR2,OUTPUT);  pinMode(CLK2,OUTPUT);
+    pinMode(D2,OUTPUT);   pinMode(CLR2,OUTPUT);
+
+    // Release preset and clear (both active low — HIGH = inactive)
+    digitalWrite(PR1,HIGH);  digitalWrite(CLR1,HIGH);
+    digitalWrite(PR2,HIGH);  digitalWrite(CLR2,HIGH);
+    delay(5);
+
+    bool pass = true;
+
+    // ── FF1 tests ──
+    // Clock in D=1 on rising edge → Q should go HIGH
+    digitalWrite(D1,HIGH);
+    digitalWrite(CLK1,LOW);  delay(5);
+    digitalWrite(CLK1,HIGH); delay(5);
+    if (digitalRead(Q1) != HIGH || digitalRead(NQ1) != LOW) pass = false;
+
+    // Clock in D=0 → Q should go LOW
+    digitalWrite(D1,LOW);
+    digitalWrite(CLK1,LOW);  delay(5);
+    digitalWrite(CLK1,HIGH); delay(5);
+    if (digitalRead(Q1) != LOW || digitalRead(NQ1) != HIGH) pass = false;
+
+    // Test CLR1 (active low) — set Q then clear it
+    digitalWrite(D1,HIGH);
+    digitalWrite(CLK1,LOW);  delay(5);
+    digitalWrite(CLK1,HIGH); delay(5);   // Q=1
+    digitalWrite(CLR1,LOW);  delay(5);   // Assert clear
+    if (digitalRead(Q1) != LOW) pass = false;
+    digitalWrite(CLR1,HIGH);
+
+    // ── FF2 tests ──
+    // Clock in D=1 → Q2 HIGH
+    digitalWrite(D2,HIGH);
+    digitalWrite(CLK2,LOW);  delay(5);
+    digitalWrite(CLK2,HIGH); delay(5);
+    if (digitalRead(Q2) != HIGH || digitalRead(NQ2) != LOW) pass = false;
+
+    // Clock in D=0 → Q2 LOW
+    digitalWrite(D2,LOW);
+    digitalWrite(CLK2,LOW);  delay(5);
+    digitalWrite(CLK2,HIGH); delay(5);
+    if (digitalRead(Q2) != LOW || digitalRead(NQ2) != HIGH) pass = false;
+
+    // Test CLR2 (active low)
+    digitalWrite(D2,HIGH);
+    digitalWrite(CLK2,LOW);  delay(5);
+    digitalWrite(CLK2,HIGH); delay(5);   // Q2=1
+    digitalWrite(CLR2,LOW);  delay(5);
+    if (digitalRead(Q2) != LOW) pass = false;
+    digitalWrite(CLR2,HIGH);
+
+    showResult("7474", pass);
+}
+
+// ─────────────────────────────────────────────
+// INDUCTANCE MEASUREMENT
+// GPIO 32 → OUTPUT (drives LC circuit via 150Ω resistor)
+// GPIO 35 → INPUT  (reads comparator/op-amp output)
+// ─────────────────────────────────────────────
+void measureInductance() {
+    pinMode(INDUCTOR_DRIVE_PIN, OUTPUT);
+    pinMode(INDUCTOR_PULSE_PIN, INPUT);
+
+    while (true) {
+        // Charge the inductor then release to let LC circuit resonate
+        digitalWrite(INDUCTOR_DRIVE_PIN, HIGH);
+        delay(5);                           // Give inductor time to charge
+        digitalWrite(INDUCTOR_DRIVE_PIN, LOW);
+        delayMicroseconds(100);             // Let resonation settle before measuring
+
+        double pulse = pulseIn(INDUCTOR_PULSE_PIN, HIGH, 5000); // Timeout 5ms
+
+        if (pulse > 0.1) {  // Valid reading — no timeout
+            double frequency   = 1.0e6 / (2.0 * pulse);
+            double inductance  = 1.0 / (INDUCTOR_CAPACITANCE * frequency * frequency
+                                        * 4.0 * 3.14159 * 3.14159);
+            double ind_uH      = inductance * 1.0e6;
+            double ind_mH      = ind_uH * 0.001;
+
+            Serial.print("Pulse uS: ");    Serial.print(pulse);
+            Serial.print("\tFreq Hz: ");   Serial.print(frequency);
+            Serial.print("\tInduct uH: "); Serial.println(ind_uH);
+
+            dispBegin();
+            display.println("Inductance:");
+            display.setCursor(0, 12);
+            display.print(ind_uH, 2);
+            display.print(" uH  ");
+            display.print(ind_mH, 4);
+            display.println(" mH");
+            display.display();
+        } else {
+            // Timeout — no valid resonance pulse detected
+            Serial.println("No pulse — check LC circuit");
+            dispBegin();
+            display.println("No pulse.");
+            display.setCursor(0, 12);
+            display.println("Check LC circuit");
+            display.display();
         }
 
-        // DOWN Button (Scroll Down)
-        if (digitalRead(DOWN_BUTTON) == HIGH) {
-            if (mode_index2 < total_modes2 - 1) {
-                mode_index2++;
-                delay(200);  // Debounce delay
-            }
-        }
-
-        // NEXT Button (Select Mode)
-        if (digitalRead(NEXT_BUTTON) == HIGH) {
-            executeMode2(mode_index2);
-            break; 
-        }
-        
-        delay(50);  // Small delay to prevent overwhelming the CPU
+        delay(10);
     }
 }
 
+// ─────────────────────────────────────────────
+// SETUP & LOOP
+// ─────────────────────────────────────────────
 
 void setup() {
     Serial.begin(115200);
-    
-    // Initialize OLED
+
     if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
         Serial.println("SSD1306 allocation failed");
         for (;;);
     }
 
-    // Configure button inputs (Active High)
     pinMode(UP_BUTTON, INPUT);
     pinMode(DOWN_BUTTON, INPUT);
     pinMode(NEXT_BUTTON, INPUT);
 
-    displayModes0(); // Show initial mode list
+    displayModes0();
 }
 
 void loop() {
-    // UP Button (Scroll Up)
     buttons();
 }
